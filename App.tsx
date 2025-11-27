@@ -24,39 +24,81 @@ function App() {
   const [plannerState, setPlannerState] = useState<DailyPlanState>(INITIAL_STATE);
   const [isGenerating, setIsGenerating] = useState(false);
 
-  // Load from local storage on mount
-  useEffect(() => {
-    const saved = localStorage.getItem('zenith_planner_state');
+  // Helper to load state for a specific date
+  const loadStateForDate = (date: string): DailyPlanState => {
+    const key = `zenith_planner_${date}`;
+    const saved = localStorage.getItem(key);
+    
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        
-        // Migration logic for old data format (mainGoal -> priorities)
-        if (parsed.mainGoal && (!parsed.priorities || parsed.priorities.length === 0)) {
-          parsed.priorities = [parsed.mainGoal, '', ''];
-        }
-        
-        // Ensure priorities array exists and has length 3
+        // Ensure migration/integrity
         if (!parsed.priorities || !Array.isArray(parsed.priorities)) {
            parsed.priorities = ['', '', ''];
-        } else {
-           while(parsed.priorities.length < 3) parsed.priorities.push('');
         }
-
-        setPlannerState(prev => ({ ...prev, ...parsed }));
+        while(parsed.priorities.length < 3) parsed.priorities.push('');
+        
+        return { ...parsed, date }; // Ensure date matches key
       } catch (e) {
-        console.error("Failed to load state", e);
+        console.error("Failed to parse saved state for date", date, e);
+      }
+    }
+    return { ...INITIAL_STATE, date, selectedDay: new Date(date).getDay() };
+  };
+
+  // Initialization: Load today's data or migrate legacy data
+  useEffect(() => {
+    const today = new Date().toISOString().split('T')[0];
+    const todayKey = `zenith_planner_${today}`;
+    
+    // Check if we have data for today
+    if (localStorage.getItem(todayKey)) {
+      setPlannerState(loadStateForDate(today));
+    } else {
+      // Check for legacy single-file data
+      const legacySaved = localStorage.getItem('zenith_planner_state');
+      if (legacySaved) {
+        try {
+          const parsed = JSON.parse(legacySaved);
+          // Migration logic
+          if (parsed.mainGoal && (!parsed.priorities || parsed.priorities.length === 0)) {
+            parsed.priorities = [parsed.mainGoal, '', ''];
+          }
+          if (!parsed.priorities) parsed.priorities = ['', '', ''];
+          
+          // Use legacy data but update date to today
+          const migratedState = { ...parsed, date: today, selectedDay: new Date(today).getDay() };
+          setPlannerState(migratedState);
+          
+          // Save to new format immediately
+          localStorage.setItem(todayKey, JSON.stringify(migratedState));
+          // Optional: localStorage.removeItem('zenith_planner_state');
+        } catch (e) {
+          setPlannerState(loadStateForDate(today));
+        }
+      } else {
+        setPlannerState(loadStateForDate(today));
       }
     }
   }, []);
 
-  // Save to local storage on change
+  // Save changes automatically to the key corresponding to the current state's date
   useEffect(() => {
-    localStorage.setItem('zenith_planner_state', JSON.stringify(plannerState));
+    if (plannerState.date) {
+      const key = `zenith_planner_${plannerState.date}`;
+      localStorage.setItem(key, JSON.stringify(plannerState));
+    }
   }, [plannerState]);
 
   const updateState = (updates: Partial<DailyPlanState>) => {
-    setPlannerState(prev => ({ ...prev, ...updates }));
+    // If date is changing, we need to load the data for the new date
+    if (updates.date && updates.date !== plannerState.date) {
+      const newDate = updates.date;
+      const newState = loadStateForDate(newDate);
+      setPlannerState(newState);
+    } else {
+      setPlannerState(prev => ({ ...prev, ...updates }));
+    }
   };
 
   const handleAIPlanning = async () => {
@@ -103,7 +145,12 @@ function App() {
 
   const resetPlanner = () => {
     if (confirm("정말로 계획표를 초기화하시겠습니까?")) {
-        setPlannerState(INITIAL_STATE);
+        // Resetting only the current date's plan
+        setPlannerState({ 
+          ...INITIAL_STATE, 
+          date: plannerState.date, 
+          selectedDay: new Date(plannerState.date).getDay() 
+        });
     }
   };
 
